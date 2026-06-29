@@ -3,7 +3,7 @@ import { Briefcase, RefreshCw, UploadCloud, TrendingUp, TrendingDown, AlertCircl
 
 const POLYGON_API_KEY = import.meta.env.VITE_POLYGON_API_KEY;
 const GEMINI_API_KEY  = import.meta.env.VITE_GEMINI_API_KEY;
-const GEMINI_ENDPOINT  = "/api/gemini/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY;
+const GEMINI_ENDPOINT  = "/api/gemini/v1beta/models/gemini-2.5-flash:generateContent?key=" + GEMINI_API_KEY;
 const POLYGON_ENDPOINT = (ticker) => "/api/polygon/v2/snapshot/locale/us/markets/stocks/tickers/" + encodeURIComponent(ticker) + "?apiKey=" + POLYGON_API_KEY;
 
 const RATE_DELAY_MS = 600;
