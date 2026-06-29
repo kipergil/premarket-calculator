@@ -5,6 +5,8 @@ const POLYGON_API_KEY = import.meta.env.VITE_POLYGON_API_KEY;
 const GEMINI_API_KEY  = import.meta.env.VITE_GEMINI_API_KEY;
 const GEMINI_ENDPOINT  = "/api/gemini/v1beta/models/gemini-2.5-flash:generateContent?key=" + GEMINI_API_KEY;
 const POLYGON_ENDPOINT = (ticker) => "/api/polygon/v2/snapshot/locale/us/markets/stocks/tickers/" + encodeURIComponent(ticker) + "?apiKey=" + POLYGON_API_KEY;
+// Yahoo uses dashes for class shares (BRK.B -> BRK-B). includePrePost surfaces premarket bars.
+const YAHOO_ENDPOINT = (ticker) => "/api/yahoo/v8/finance/chart/" + encodeURIComponent(ticker.replace(/\./g, "-")) + "?includePrePost=true&interval=1m&range=1d";
 
 const RATE_DELAY_MS = 600;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -53,19 +55,46 @@ async function extractStocksFromImage(base64, mediaType) {
   return text.trim();
 }
 
-async function fetchSnapshot(ticker) {
+async function fetchSnapshot(ticker, log) {
   try {
     const res  = await fetch(POLYGON_ENDPOINT(ticker.toUpperCase()));
     const json = await res.json();
+    // Surface API-level errors (auth, rate limit, plan restrictions) instead of silently dropping them.
+    if (json?.status === "ERROR" || json?.error) {
+      log?.(ticker + " Polygon error: " + (json.error || json.message || json.status));
+    }
     const snap = json?.ticker;
-    if (!snap) return {};
+    if (!snap) { log?.(ticker + " no snapshot. raw=" + JSON.stringify(json).slice(0, 300)); return {}; }
+    log?.(ticker + " raw: lastTrade=" + JSON.stringify(snap.lastTrade) + " min.c=" + (snap.min?.c) + " day.c=" + (snap.day?.c) + " prevDay.c=" + (snap.prevDay?.c) + " updated=" + snap.updated);
     return {
       closePrice:      snap.prevDay?.c       ?? null,
       currentPrice:    snap.lastTrade?.p     ?? snap.min?.c ?? snap.day?.c ?? null,
       todaysChange:    snap.todaysChange     ?? null,
       todaysChangePct: snap.todaysChangePerc ?? null,
     };
-  } catch { return {}; }
+  } catch (e) { log?.(ticker + " fetch failed: " + e.message); return {}; }
+}
+
+// Yahoo Finance returns premarket/extended-hours prices for free (unlike Polygon's free tier).
+// The latest value in the includePrePost minute series is the current premarket price.
+async function fetchYahoo(ticker, log) {
+  try {
+    const res  = await fetch(YAHOO_ENDPOINT(ticker.toUpperCase()));
+    const json = await res.json();
+    const result = json?.chart?.result?.[0];
+    if (!result) { log?.(ticker + " yahoo: no data " + JSON.stringify(json?.chart?.error ?? json).slice(0, 200)); return {}; }
+    const meta      = result.meta ?? {};
+    const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? null;
+    // Walk the minute series backwards for the most recent non-null close (includes premarket).
+    const closes = result.indicators?.quote?.[0]?.close ?? [];
+    let last = null;
+    for (let i = closes.length - 1; i >= 0; i--) { if (closes[i] != null) { last = closes[i]; break; } }
+    const current   = last ?? meta.regularMarketPrice ?? null;
+    const change    = current != null && prevClose != null ? current - prevClose : null;
+    const changePct = change != null && prevClose ? (change / prevClose) * 100 : null;
+    log?.(ticker + " yahoo: current=" + current + " prevClose=" + prevClose + " state=" + meta.marketState);
+    return { closePrice: prevClose, currentPrice: current, todaysChange: change, todaysChangePct: changePct };
+  } catch (e) { log?.(ticker + " yahoo failed: " + e.message); return {}; }
 }
 
 export default function App() {
@@ -127,7 +156,9 @@ export default function App() {
     for (let i=0; i<src.length; i++) {
       if (i>0) await sleep(RATE_DELAY_MS);
       const s = src[i];
-      const snap = await fetchSnapshot(s.ticker);
+      // Yahoo gives free premarket prices; fall back to Polygon if it returns nothing.
+      const y = await fetchYahoo(s.ticker, log);
+      const snap = y.currentPrice != null ? y : await fetchSnapshot(s.ticker, log);
       const eff = snap.closePrice ?? s.closePrice ?? null;
       const gain = snap.currentPrice!=null && eff!=null ? (snap.currentPrice-eff)*s.shares : null;
       updated.push({ ...s, ...snap, closePrice:eff, gain });
@@ -145,7 +176,7 @@ export default function App() {
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-lg border border-violet-700/50 bg-violet-950/60"><Briefcase size={18} className="text-violet-400" /></div>
-            <div><p className="text-sm font-semibold text-white">Premarket Gain Calculator</p><p className="text-[10px] text-slate-500">Polygon.io · Gemini 2.0 Flash Vision</p></div>
+            <div><p className="text-sm font-semibold text-white">Premarket Gain Calculator</p><p className="text-[10px] text-slate-500">Yahoo Finance · Gemini 2.5 Flash Vision</p></div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={status} />
@@ -246,7 +277,7 @@ export default function App() {
           </div>
         )}
       </main>
-      <footer className="border-t border-slate-800/60 py-3 px-5 text-center text-[10px] text-slate-700">Polygon.io (Massive) · Gemini 2.0 Flash Vision · Lightyear compatible</footer>
+      <footer className="border-t border-slate-800/60 py-3 px-5 text-center text-[10px] text-slate-700">Yahoo Finance (premarket) · Gemini 2.5 Flash Vision · Lightyear compatible</footer>
     </div>
   );
 }
