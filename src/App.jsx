@@ -53,19 +53,24 @@ async function extractStocksFromImage(base64, mediaType) {
   return text.trim();
 }
 
-async function fetchSnapshot(ticker) {
+async function fetchSnapshot(ticker, log) {
   try {
     const res  = await fetch(POLYGON_ENDPOINT(ticker.toUpperCase()));
     const json = await res.json();
+    // Surface API-level errors (auth, rate limit, plan restrictions) instead of silently dropping them.
+    if (json?.status === "ERROR" || json?.error) {
+      log?.(ticker + " Polygon error: " + (json.error || json.message || json.status));
+    }
     const snap = json?.ticker;
-    if (!snap) return {};
+    if (!snap) { log?.(ticker + " no snapshot. raw=" + JSON.stringify(json).slice(0, 300)); return {}; }
+    log?.(ticker + " raw: lastTrade=" + JSON.stringify(snap.lastTrade) + " min.c=" + (snap.min?.c) + " day.c=" + (snap.day?.c) + " prevDay.c=" + (snap.prevDay?.c) + " updated=" + snap.updated);
     return {
       closePrice:      snap.prevDay?.c       ?? null,
       currentPrice:    snap.lastTrade?.p     ?? snap.min?.c ?? snap.day?.c ?? null,
       todaysChange:    snap.todaysChange     ?? null,
       todaysChangePct: snap.todaysChangePerc ?? null,
     };
-  } catch { return {}; }
+  } catch (e) { log?.(ticker + " fetch failed: " + e.message); return {}; }
 }
 
 export default function App() {
@@ -127,7 +132,7 @@ export default function App() {
     for (let i=0; i<src.length; i++) {
       if (i>0) await sleep(RATE_DELAY_MS);
       const s = src[i];
-      const snap = await fetchSnapshot(s.ticker);
+      const snap = await fetchSnapshot(s.ticker, log);
       const eff = snap.closePrice ?? s.closePrice ?? null;
       const gain = snap.currentPrice!=null && eff!=null ? (snap.currentPrice-eff)*s.shares : null;
       updated.push({ ...s, ...snap, closePrice:eff, gain });
