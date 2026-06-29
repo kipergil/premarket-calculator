@@ -3,7 +3,7 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [
-    { "source": "/api/gemini",  "destination": "/api/gemini" },
-    { "source": "/api/polygon", "destination": "/api/polygon" }
+    { "source": "/api/gemini/:path*",  "destination": "/api/gemini" },
+    { "source": "/api/polygon/:path*", "destination": "/api/polygon" }
   ]
 }
